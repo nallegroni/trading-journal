@@ -1,0 +1,13 @@
+package com.nallegroni.tradingjournal;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class TradingJournalApiApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(TradingJournalApiApplication.class, args);
+	}
+
+}
