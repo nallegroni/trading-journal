@@ -1,28 +1,41 @@
 package com.nallegroni.tradingjournal.model;
 
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 
+import com.nallegroni.tradingjournal.model.enums.Currency;
 import com.nallegroni.tradingjournal.model.enums.TradeStatus;
 import com.nallegroni.tradingjournal.model.enums.TypeOrder;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 @Data
 @Entity
+@NoArgsConstructor
+@Table(name = "trades")
 public class Trade {
 
     @Id 
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private String symbol;
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Trader trader;
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    private Symbol symbol;
     private BigDecimal lotSize;
 
     private BigDecimal entryPrice;
@@ -39,7 +52,10 @@ public class Trade {
     @Enumerated(EnumType.STRING)
     private TradeStatus tradeStatus;
 
-    public Trade(String symbol, BigDecimal entryPrice, TypeOrder typeOrder, BigDecimal lotSize) {
+    private BigDecimal profitLoss = BigDecimal.ZERO;
+
+
+    public Trade(Symbol symbol, BigDecimal entryPrice, TypeOrder typeOrder, BigDecimal lotSize) {
         this.symbol = symbol;
         this.typeOrder = typeOrder;
         this.lotSize = lotSize;
@@ -48,7 +64,7 @@ public class Trade {
         this.tradeStatus = TradeStatus.OPEN;
     }
 
-    public Trade(String symbol, BigDecimal entryPrice, TypeOrder typeOrder, BigDecimal lotSize, BigDecimal SL, BigDecimal TP) {
+    public Trade(Symbol symbol, BigDecimal entryPrice, TypeOrder typeOrder, BigDecimal lotSize, BigDecimal SL, BigDecimal TP) {
         this.symbol = symbol;
         this.typeOrder = typeOrder;
         this.lotSize = lotSize;
@@ -80,16 +96,10 @@ public class Trade {
         this.validateExitDate(exitDate);
         this.exitDate = exitDate;
 
-        BigDecimal profitOrLoss;
-        
-        if (this.typeOrder == TypeOrder.BUY) {
-            profitOrLoss = this.exitPrice.subtract(this.entryPrice);
-        } else {
-            profitOrLoss = this.entryPrice.subtract(this.exitPrice);
-        }
+        this.profitLoss = this.calculateProfitLoss();
 
         // signum devuelve 1 si es positivo, -1 si es negativo, 0 si es cero
-        int result = profitOrLoss.signum();
+        int result = this.profitLoss.signum();
 
         if (result > 0) {
             this.tradeStatus = TradeStatus.WIN;
@@ -98,6 +108,55 @@ public class Trade {
         } else {
             this.tradeStatus = TradeStatus.BREAK_EVEN;
         }
+    }
+
+    protected BigDecimal calculateProfitLoss() {
+        // P/L = (Precio de Salida - Precio de Entrada) * Volumen en Unidades
+        BigDecimal contractSize = this.symbol.getContractSize();
+        BigDecimal unitsVolume = this.lotSize.multiply(contractSize);
+
+        BigDecimal priceDifference;
+        if (this.typeOrder == TypeOrder.BUY) {
+            priceDifference = this.exitPrice.subtract(this.entryPrice);
+        } else {
+            priceDifference = this.entryPrice.subtract(this.exitPrice);
+        }
+
+        BigDecimal rawPnL = priceDifference.multiply(unitsVolume);
+        Currency accountCurrency = this.getTrader().getAccountCurrency();
+        Currency baseCurrency = this.getSymbol().getBaseCurrency();   // Ej: "EUR" en EURUSD
+        Currency quoteCurrency = this.getSymbol().getQuoteCurrency(); // Ej: "USD" en EURUSD
+
+        BigDecimal pnl;
+        if (quoteCurrency.equals(accountCurrency)) {
+            // CASO 1: Par Directo (Ej: EUR/USD, GBP/USD, XAU/USD)
+            // El resultado ya está en la moneda de la cuenta.
+            pnl = rawPnL;
+
+        } else if (baseCurrency.equals(accountCurrency)) {
+            // CASO 2: Par Inverso (Ej: USD/JPY, USD/CHF, USD/CAD)
+            // El resultado está en JPY, CHF, etc.
+            // Para pasar a USD, DIVIDIMOS por el precio de salida (Current Rate).
+            // Fórmula: PnL_USD = PnL_JPY / Precio_USDJPY
+            
+            // Nota: MathContext.DECIMAL128 para precisión en división
+            pnl = rawPnL.divide(this.exitPrice, MathContext.DECIMAL128);
+
+        } else {
+            // CASO 3: Par Cruzado (Ej: EUR/GBP con cuenta en USD)
+            // El resultado está en GBP. Necesitamos la tasa GBP/USD para convertir.
+            // Esto es más complejo porque necesitas buscar el precio de OTRO símbolo en tu API.
+            
+            // BigDecimal conversionRate = tradingService.getPrice(quoteCurrency + accountCurrency);
+            // this.profitLoss = rawPnL.multiply(conversionRate);
+            
+            // Por ahora, si no tienes ese servicio a mano, puedes dejarlo pendiente o lanzar una excepción.
+            System.out.println("Conversión de par cruzado requerida");
+            pnl = rawPnL; // Valor en moneda cotizada (incorrecto para el balance)
+        }
+
+        // Redondeo final a 2 decimales para mostrar en el balance
+        return pnl.setScale(2, RoundingMode.HALF_UP);
     }
 
     // Validaciones

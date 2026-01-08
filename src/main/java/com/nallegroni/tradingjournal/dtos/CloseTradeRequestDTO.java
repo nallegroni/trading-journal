@@ -5,6 +5,6 @@ import java.math.BigDecimal;
 import lombok.Data;
 
 @Data
-public class CloseTradeRequest {
+public class CloseTradeRequestDTO {
     private BigDecimal exitPrice;
 }
